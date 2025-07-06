@@ -7,20 +7,3 @@ export async function POST({ request }) {
   const id = await saveProfile(profile);
   return json({ success: true, id });
 }
-
-async function saveToDatabase(profile: any) {
-  const response = await fetch('/api/save-profile', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify(profile)
-  });
-
-  const result = await response.json();
-  if (result.success) {
-    console.log('Saved to DB with ID:', result.id);
-  } else {
-    console.error('Save failed');
-  }
-}

@@ -486,6 +486,43 @@
     fileInput?.click();
   };
 
+  
+
+  async function saveToDatabase(event: MouseEvent) {
+  event.preventDefault();
+
+  const profileData = {
+    profile_name,
+    profile_description,
+    tone_of_voice,
+    evaluationCriteria: [criterion1, criterion2, criterion3].filter(Boolean),
+    summaryLength: stepValue,
+    categoryTags,
+    rssFeeds,
+    exportedAt: new Date().toISOString(),
+    version: '1.0'
+  };
+
+  try {
+    const response = await fetch('/api/save-profile', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(profileData)
+    });
+
+    const result = await response.json();
+    if (result.success) {
+      console.log('Saved to DB with ID:', result.id);
+    } else {
+      console.error('Failed to save profile');
+    }
+  } catch (error) {
+    console.error('Error saving profile to DB:', error);
+  }
+}
+
 </script>
 
 <!-- Page title -->
@@ -708,7 +745,9 @@
           <!-- Right side - Action buttons -->
           <div class="space-x-3">
             <Button color="alternative" onclick={cancelChanges}>Cancel</Button>
-            <Button color="primary" onclick={() => saveToDatabase(currentProfile)}>Save DB Profile</Button>
+            <Button color="primary" onclick={saveToDatabase}>
+            Save DB Profile
+            </Button>
             <Button color="green" onclick={saveProfile}>Save Local Profile</Button>
           </div>
         </div>

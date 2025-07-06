@@ -257,6 +257,16 @@
   }
 
   // Profile validation and saving
+  let saveProfileDB = () => {
+    // Save to localStorage
+    saveToStorage(); // This will also trigger auto-save logic - amend to redirect to DB save if needed
+    
+    // Simulate preparing for newsletter app integration
+    const newsletterData = prepareForNewsletterApp();
+    console.log('Profile ready for newsletter app:', newsletterData);
+    
+    alert('Profile saved successfully!');
+  };
   let saveStatus: null | 'saving' | 'success' | 'error' = null; // null, 'saving', 'success', 'error'
   let validationErrors: string[] = [];
   let lastSaveTime: Date | null = null;
@@ -480,7 +490,7 @@
 
 <!-- Page title -->
 <svelte:head>
-    <title>CP04 Profile Editor</title>
+    <title>CP05 Profile Editor</title>
 </svelte:head>
 
 <!-- MAIN CONTAINER -->
@@ -526,7 +536,9 @@
       <form>
         <div class="mb-6 grid gap-8 md:grid-cols-2">
           <div>
-            <Label for="profile_name" class="mb-2">Profile Name</Label>
+            <Label for="profile_name" class="mb-2">
+              Profile Name
+            </Label>
             <Input type="text" id="profile_name" placeholder="Name" required class="mb-6" bind:value={profile_name}/>
 
             <Label for="profile_description" class="mb-2">Profile Description</Label>
@@ -696,7 +708,8 @@
           <!-- Right side - Action buttons -->
           <div class="space-x-3">
             <Button color="alternative" onclick={cancelChanges}>Cancel</Button>
-            <Button color="green" onclick={saveProfile}>Save Profile</Button>
+            <Button color="primary" onclick={() => saveToDatabase(currentProfile)}>Save DB Profile</Button>
+            <Button color="green" onclick={saveProfile}>Save Local Profile</Button>
           </div>
         </div>
 

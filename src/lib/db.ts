@@ -1,18 +1,55 @@
-// src/lib/db.ts - Updated database functions
+// src/lib/db.ts - Using SvelteKit environment variables
 import { Pool } from 'pg';
+import { DATABASE_URL } from '$env/static/private';
 import type { DatabaseProfile, ProfileData } from './types';
 
+// Validate environment variables
+if (!DATABASE_URL) {
+  throw new Error('DATABASE_URL environment variable is required. Please check your .env file.');
+}
+
+console.log('Database URL loaded:', DATABASE_URL ? '✅ Found' : '❌ Missing');
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: DATABASE_URL,
   ssl: { rejectUnauthorized: false }
 });
 
-// Validate database connection on startup
-if (!process.env.DATABASE_URL) {
-  throw new Error('DATABASE_URL environment variable is required');
+// Test database connection on startup
+async function testDatabaseConnection() {
+  try {
+    const client = await pool.connect();
+    console.log('✅ Database connection successful');
+    
+    // Test if profiles table exists
+    const result = await client.query("SELECT to_regclass('profiles') as table_exists");
+    if (result.rows[0].table_exists) {
+      console.log('✅ Profiles table found');
+    } else {
+      console.warn('⚠️ Profiles table not found - you may need to create it');
+    }
+    
+    client.release();
+  } catch (error) {
+    console.error('❌ Database connection failed:', error);
+    throw error;
+  }
+}
+
+// Call test connection in development
+if (process.env.NODE_ENV !== 'production') {
+  testDatabaseConnection().catch(console.error);
 }
 
 export async function saveProfile(profile: DatabaseProfile) {
+  console.log('🔄 Attempting to save profile to database...');
+  console.log('📝 Profile data:', {
+    name: profile.profile_name,
+    description: profile.profile_description?.substring(0, 50) + '...',
+    isActive: profile.is_active,
+    hasJson: !!profile.profile_json
+  });
+  
   const { profile_name, profile_description, is_active, profile_json } = profile;
 
   const query = `
@@ -30,11 +67,18 @@ export async function saveProfile(profile: DatabaseProfile) {
 
   const client = await pool.connect();
   try {
+    console.log('📝 Executing database query...');
     const result = await client.query(query, values);
+    console.log('✅ Profile saved successfully with ID:', result.rows[0].id);
+    
     return {
       id: result.rows[0].id,
       created_at: result.rows[0].created_at
     };
+  } catch (error) {
+    console.error('❌ Database save error:', error);
+    console.error('❌ Query values:', values);
+    throw error;
   } finally {
     client.release();
   }

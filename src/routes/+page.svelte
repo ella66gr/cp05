@@ -1,4 +1,4 @@
-<!-- src/routes/components/+page.svelte -->
+<!-- src/routes/+page.svelte - Complete CP05 Profile Editor with Enhanced Save UI -->
 
 <script lang="ts">
   import { 
@@ -27,8 +27,15 @@
 
   import { AlignJustifyOutline, ChevronDownOutline, DownloadOutline, UploadOutline, TrashBinOutline, CheckCircleOutline, ExclamationCircleOutline } from "flowbite-svelte-icons";
   import { onMount } from 'svelte';
+  import { ProfileManager } from '$lib/profileManager';
+  import type { RSSFeed, CategoryTags } from '$lib/types';
 
-  // Form variables
+  // ===== PROFILE MANAGER & FORM VARIABLES =====
+  
+  // Initialize ProfileManager for structured profile handling
+  let profileManager = new ProfileManager();
+
+  // Form variables for user input
   let profile_name = '';
   let criterion1 = '';
   let criterion2 = '';
@@ -40,7 +47,7 @@
   let newFeedName = '';
 
   // Category tags with binding
-  let categoryTags = {
+  let categoryTags: CategoryTags = {
     inTheNews: false,
     transHealth: false,
     genderSenseLatest: false,
@@ -52,23 +59,33 @@
   // RSS Feed data with selection state
   let rssFeeds: RSSFeed[] = [];
 
-  // Storage key
-  const STORAGE_KEY = 'cp04_profile_data';
+  // ===== SAVE STATUS & UI STATE =====
+  
+  // Enhanced save status tracking
+  let saveStatus: null | 'saving' | 'success' | 'error' = null;
+  let validationErrors: string[] = [];
+  let lastSaveTime: Date | null = null;
+  let lastSavedProfileId: string | null = null; // Track the saved profile ID
+  let saveLocation: 'local' | 'database' | null = null; // Track where it was saved
+  let detailedSaveMessage: string = '';
 
+  // Storage and client state
+  const STORAGE_KEY = 'cp05_profile_data';
+  let isClient = false;
+
+  // ===== LIFECYCLE & INITIALIZATION =====
+  
   // Load data from localStorage on component mount
   onMount(() => {
     isClient = true;
     loadFromStorage();
   });
 
-  // Browser-only storage functions
-  let isClient = false;
-
-  // Save data to localStorage
-  function saveToStorage() {
-    if (!isClient) return;
-    
-    const profileData = {
+  // ===== PROFILE MANAGEMENT FUNCTIONS =====
+  
+  // Update profile manager with current form data
+  function updateProfileManager() {
+    profileManager.updateFromFormData({
       profile_name,
       profile_description,
       tone_of_voice,
@@ -77,13 +94,20 @@
       criterion3,
       stepValue,
       categoryTags,
-      rssFeeds: rssFeeds.map(feed => ({ ...feed, selected: false })), // Don't save selection state
-      lastSaved: new Date().toISOString()
-    };
+      rssFeeds
+    });
+  }
+
+  // Save data to localStorage
+  function saveToStorage() {
+    if (!isClient) return;
+    
+    updateProfileManager();
+    const profileData = profileManager.getProfile();
 
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(profileData));
-      console.log('Profile data saved to localStorage');
+      console.log('Profile data saved to localStorage', profileManager.getProfileSummary());
     } catch (error) {
       console.error('Failed to save to localStorage:', error);
       console.log('Failed to save profile data. Storage might be full.');
@@ -98,33 +122,35 @@
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const profileData = JSON.parse(saved);
+        profileManager.loadFromJSON(profileData);
         
-        // Restore form fields
-        profile_name = profileData.profile_name || '';
-        profile_description = profileData.profile_description || '';
-        tone_of_voice = profileData.tone_of_voice || '';
-        criterion1 = profileData.criterion1 || '';
-        criterion2 = profileData.criterion2 || '';
-        criterion3 = profileData.criterion3 || '';
-        stepValue = profileData.stepValue || 150;
+        // Update form fields from loaded profile
+        const profile = profileManager.getProfile();
+        profile_name = profile.profile_name;
+        profile_description = profile.profile_description;
+        tone_of_voice = profile.tone_of_voice;
+        stepValue = profile.summaryLength;
         
-        // Restore category tags
-        if (profileData.categoryTags) {
-          categoryTags = { ...categoryTags, ...profileData.categoryTags };
-        }
+        // Load evaluation criteria
+        criterion1 = profile.evaluationCriteria[0] || '';
+        criterion2 = profile.evaluationCriteria[1] || '';
+        criterion3 = profile.evaluationCriteria[2] || '';
         
-        // Restore RSS feeds
-        if (profileData.rssFeeds) {
-          rssFeeds = profileData.rssFeeds;
-        }
+        // Load category tags
+        categoryTags = { ...profile.categoryTags };
         
-        console.log('Profile data loaded from localStorage');
+        // Load RSS feeds
+        rssFeeds = profile.rssFeeds.map(feed => ({ ...feed, selected: false }));
+        
+        console.log('Profile data loaded from localStorage', profileManager.getProfileSummary());
       }
     } catch (error) {
       console.error('Failed to load from localStorage:', error);
     }
   }
 
+  // ===== AUTO-SAVE FUNCTIONALITY =====
+  
   // Auto-save when data changes (debounced)
   let saveTimeout: ReturnType<typeof setTimeout> | undefined;
   function autoSave() {
@@ -146,12 +172,137 @@
   $: if (categoryTags) autoSave();
   $: if (rssFeeds) autoSave();
 
+  // ===== ENHANCED SAVE FUNCTIONS =====
+  
+  // Enhanced local save function with detailed UI feedback
+  function saveProfile() {
+    saveStatus = 'saving';
+    saveLocation = 'local';
+    detailedSaveMessage = 'Saving to local storage...';
+    
+    updateProfileManager();
+    
+    const validation = profileManager.validateForDatabase();
+    validationErrors = validation.errors;
+    
+    if (!validation.isValid) {
+      saveStatus = 'error';
+      detailedSaveMessage = `Local save failed: ${validation.errors.length} validation error(s).`;
+      return;
+    }
+    
+    try {
+      saveToStorage();
+      
+      saveStatus = 'success';
+      lastSaveTime = new Date();
+      saveLocation = 'local';
+      
+      const summary = profileManager.getProfileSummary();
+      detailedSaveMessage = `Profile "${summary.name}" saved locally with ${summary.criteriaCount} criteria, ${summary.activeFeedsCount} active feeds.`;
+      
+      // Reset status after 3 seconds for local saves
+      setTimeout(() => {
+        saveStatus = null;
+        detailedSaveMessage = '';
+        saveLocation = null;
+      }, 3000);
+      
+    } catch (error) {
+      console.error('Failed to save profile locally:', error);
+      saveStatus = 'error';
+      saveLocation = 'local';
+      detailedSaveMessage = 'Failed to save to local storage. Storage might be full.';
+      validationErrors = ['Failed to save profile locally. Please try again.'];
+    }
+  }
+
+  // Enhanced database save function with detailed UI feedback
+  async function saveToDatabase(event: MouseEvent) {
+    event.preventDefault();
+    saveStatus = 'saving';
+    saveLocation = 'database';
+    detailedSaveMessage = 'Validating profile data...';
+    
+    // Update profile manager with current form data
+    updateProfileManager();
+    
+    // Validate before saving
+    const validation = profileManager.validateForDatabase();
+    validationErrors = validation.errors;
+    
+    if (!validation.isValid) {
+      saveStatus = 'error';
+      detailedSaveMessage = `Validation failed: ${validation.errors.length} error(s) found.`;
+      return;
+    }
+
+    try {
+      detailedSaveMessage = 'Sending profile to database...';
+      
+      // Get the structured profile for database
+      const databaseProfile = profileManager.prepareDatabaseProfile();
+      
+      const response = await fetch('/api/save-profile', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(databaseProfile)
+      });
+
+      const result = await response.json();
+      
+      if (response.ok && result.success) {
+        // Success!
+        console.log('Saved to DB with ID:', result.id);
+        console.log('Profile Summary:', profileManager.getProfileSummary());
+        
+        saveStatus = 'success';
+        lastSaveTime = new Date();
+        lastSavedProfileId = result.id;
+        
+        const summary = profileManager.getProfileSummary();
+        detailedSaveMessage = `Profile "${summary.name}" saved successfully to database with ID: ${result.id.substring(0, 8)}...`;
+        
+        // Also save to localStorage as backup
+        saveToStorage();
+        
+        // Reset status after 5 seconds for database saves (longer to show the ID)
+        setTimeout(() => {
+          saveStatus = null;
+          detailedSaveMessage = '';
+          saveLocation = null;
+        }, 5000);
+      } else {
+        // Handle API errors
+        throw new Error(result.error || result.details || 'Failed to save profile to database');
+      }
+    } catch (error) {
+      console.error('Error saving profile to DB:', error);
+      saveStatus = 'error';
+      saveLocation = 'database';
+      
+      if (error instanceof Error) {
+        detailedSaveMessage = `Database save failed: ${error.message}`;
+        validationErrors = [error.message];
+      } else {
+        detailedSaveMessage = 'Unknown error occurred while saving to database.';
+        validationErrors = ['Failed to save to database. Please try again.'];
+      }
+    }
+  }
+
+  // ===== IMPORT/EXPORT FUNCTIONS =====
+  
   // Export profile as JSON
   function exportProfile() {
+    updateProfileManager();
+    
     // Generate default filename
     const defaultFilename = profile_name 
       ? `${profile_name.toLowerCase().replace(/[^a-z0-9]/g, '-')}-profile`
-      : 'cp04-profile';
+      : 'cp05-profile';
     
     // Let user customize filename
     const userFilename = prompt('Enter filename for export:', defaultFilename);
@@ -163,24 +314,7 @@
       ? cleanFilename 
       : `${cleanFilename}.json`;
 
-    const profileData = {
-      profile_name,
-      profile_description,
-      tone_of_voice,
-      evaluationCriteria: [criterion1, criterion2, criterion3].filter(c => c),
-      summaryLength: stepValue,
-      categoryTags,
-      rssFeeds: rssFeeds.map(feed => ({
-        id: feed.id,
-        name: feed.name,
-        url: feed.url,
-        status: feed.status
-      })),
-      exportedAt: new Date().toISOString(),
-      version: "1.0"
-    };
-
-    const jsonString = JSON.stringify(profileData, null, 2);
+    const jsonString = profileManager.exportAsJSON();
     const blob = new Blob([jsonString], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     
@@ -195,16 +329,6 @@
     console.log('Profile exported as:', finalFilename);
   }
 
-  // Define a type for RSS Feed
-  type RSSFeed = {
-    id: number;
-    name: string;
-    url: string;
-    status: string;
-    selected: boolean;
-    [key: string]: any; // Allow extra properties if needed
-  };
-
   // Import profile from JSON
   function importProfile(event: Event) {
     const input = event.target as HTMLInputElement;
@@ -215,32 +339,25 @@
     reader.onload = (e) => {
       try {
         const importedData = JSON.parse((e.target as FileReader).result as string);
+        profileManager.loadFromJSON(importedData);
         
-        // Validate and import data
-        if (importedData.profile_name !== undefined) profile_name = importedData.profile_name;
-        if (importedData.profile_description !== undefined) profile_description = importedData.profile_description;
-        if (importedData.tone_of_voice !== undefined) tone_of_voice = importedData.tone_of_voice;
-        if (importedData.summaryLength !== undefined) stepValue = importedData.summaryLength;
+        // Update form fields from imported profile
+        const profile = profileManager.getProfile();
+        profile_name = profile.profile_name;
+        profile_description = profile.profile_description;
+        tone_of_voice = profile.tone_of_voice;
+        stepValue = profile.summaryLength;
         
-        // Import criteria
-        if (importedData.evaluationCriteria && Array.isArray(importedData.evaluationCriteria)) {
-          criterion1 = importedData.evaluationCriteria[0] || '';
-          criterion2 = importedData.evaluationCriteria[1] || '';
-          criterion3 = importedData.evaluationCriteria[2] || '';
-        }
+        // Load evaluation criteria
+        criterion1 = profile.evaluationCriteria[0] || '';
+        criterion2 = profile.evaluationCriteria[1] || '';
+        criterion3 = profile.evaluationCriteria[2] || '';
         
-        // Import category tags
-        if (importedData.categoryTags) {
-          categoryTags = { ...categoryTags, ...importedData.categoryTags };
-        }
+        // Load category tags
+        categoryTags = { ...profile.categoryTags };
         
-        // Import RSS feeds
-        if (importedData.rssFeeds && Array.isArray(importedData.rssFeeds)) {
-          rssFeeds = importedData.rssFeeds.map((feed: RSSFeed) => ({
-            ...feed,
-            selected: false
-          }));
-        }
+        // Load RSS feeds
+        rssFeeds = profile.rssFeeds.map(feed => ({ ...feed, selected: false }));
         
         saveToStorage(); // Save imported data
         alert('Profile imported successfully!');
@@ -256,120 +373,28 @@
     input.value = '';
   }
 
-  // Profile validation and saving
-  let saveProfileDB = () => {
-    // Save to localStorage
-    saveToStorage(); // This will also trigger auto-save logic - amend to redirect to DB save if needed
-    
-    // Simulate preparing for newsletter app integration
-    const newsletterData = prepareForNewsletterApp();
-    console.log('Profile ready for newsletter app:', newsletterData);
-    
-    alert('Profile saved successfully!');
-  };
-  let saveStatus: null | 'saving' | 'success' | 'error' = null; // null, 'saving', 'success', 'error'
-  let validationErrors: string[] = [];
-  let lastSaveTime: Date | null = null;
-
-  // Validate profile completeness
-  function validateProfile() {
-    const errors = [];
-    
-    if (!profile_name.trim()) {
-      errors.push('Profile name is required');
-    }
-    
-    if (!tone_of_voice) {
-      errors.push('Tone of voice must be selected');
-    }
-    
-    const selectedCriteria = [criterion1, criterion2, criterion3].filter(c => c);
-    if (selectedCriteria.length === 0) {
-      errors.push('At least one evaluation criteria must be selected');
-    }
-    
-    const activeFeeds = rssFeeds.filter(feed => feed.status === 'active');
-    if (activeFeeds.length === 0) {
-      errors.push('At least one RSS feed must be active');
-    }
-    
-    const selectedCategories = Object.values(categoryTags).filter(Boolean);
-    if (selectedCategories.length === 0) {
-      errors.push('At least one category tag must be selected');
-    }
-    
-    return errors;
-  }
-
-  // Enhanced save profile function
-  function saveProfile() {
-    saveStatus = 'saving';
-    validationErrors = validateProfile();
-    
-    if (validationErrors.length > 0) {
-      saveStatus = 'error';
-      return;
-    }
-    
-    try {
-      // Save to localStorage
-      saveToStorage();
-      
-      // Simulate preparing for newsletter app integration
-      const newsletterData = prepareForNewsletterApp();
-      console.log('Profile ready for newsletter app:', newsletterData);
-      
-      saveStatus = 'success';
-      lastSaveTime = new Date();
-      
-      // Reset status after 3 seconds
-      setTimeout(() => {
-        saveStatus = null;
-      }, 3000);
-      
-    } catch (error) {
-      console.error('Failed to save profile:', error);
-      saveStatus = 'error';
-      validationErrors = ['Failed to save profile. Please try again.'];
-    }
-  }
-
-  // Prepare data specifically for newsletter app
-  function prepareForNewsletterApp() {
-    return {
-      profileId: profile_name.toLowerCase().replace(/\s+/g, '-'),
-      name: profile_name,
-      description: profile_description,
-      settings: {
-        toneOfVoice: tone_of_voice,
-        summaryLength: stepValue,
-        evaluationCriteria: [criterion1, criterion2, criterion3].filter(c => c)
-      },
-      contentSources: rssFeeds.filter(feed => feed.status === 'active').map(feed => ({
-        name: feed.name,
-        url: feed.url,
-        type: 'rss'
-      })),
-      contentCategories: Object.entries(categoryTags)
-        .filter(([key, value]) => value)
-        .map(([key, value]) => key),
-      lastUpdated: new Date().toISOString()
-    };
-  }
-
+  // ===== UTILITY FUNCTIONS =====
+  
   // Cancel function - revert to last saved state
   function cancelChanges() {
     if (confirm('Are you sure you want to cancel? All unsaved changes will be lost.')) {
       loadFromStorage();
       saveStatus = null;
       validationErrors = [];
+      detailedSaveMessage = '';
+      saveLocation = null;
     }
   }
+
+  // Clear all profile data
   function clearAllData() {
     if (!isClient) return;
     
     if (confirm('Are you sure you want to clear all profile data? This cannot be undone.')) {
       localStorage.removeItem(STORAGE_KEY);
+      
+      // Reset ProfileManager
+      profileManager = new ProfileManager();
       
       // Reset all form fields
       profile_name = '';
@@ -395,6 +420,8 @@
     }
   }
 
+  // ===== RSS FEED MANAGEMENT =====
+  
   // Reactive statement to get selected feeds
   $: selectedFeeds = rssFeeds.filter(feed => feed.selected);
   $: hasSelectedFeeds = selectedFeeds.length > 0;
@@ -464,7 +491,7 @@
 
     const nextId = rssFeeds.length > 0 ? Math.max(...rssFeeds.map(feed => feed.id)) + 1 : 1;
 
-    const newFeed = {
+    const newFeed: RSSFeed = {
       id: nextId,
       name: newFeedName.trim(),
       url: newRssUrl.trim(),
@@ -486,51 +513,23 @@
     fileInput?.click();
   };
 
+  // ===== REACTIVE PROFILE SYNC =====
   
-
-  async function saveToDatabase(event: MouseEvent) {
-  event.preventDefault();
-
-  const profileData = {
-    profile_name,
-    profile_description,
-    tone_of_voice,
-    evaluationCriteria: [criterion1, criterion2, criterion3].filter(Boolean),
-    summaryLength: stepValue,
-    categoryTags,
-    rssFeeds,
-    exportedAt: new Date().toISOString(),
-    version: '1.0'
-  };
-
-  try {
-    const response = await fetch('/api/save-profile', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(profileData)
-    });
-
-    const result = await response.json();
-    if (result.success) {
-      console.log('Saved to DB with ID:', result.id);
-    } else {
-      console.error('Failed to save profile');
+  // Reactive statement to keep profile manager in sync
+  $: {
+    if (isClient) {
+      updateProfileManager();
+      // This will trigger whenever form data changes, keeping profile manager in sync
     }
-  } catch (error) {
-    console.error('Error saving profile to DB:', error);
   }
-}
-
 </script>
 
-<!-- Page title -->
+<!-- ===== PAGE TITLE ===== -->
 <svelte:head>
     <title>CP05 Profile Editor</title>
 </svelte:head>
 
-<!-- MAIN CONTAINER -->
+<!-- ===== MAIN CONTAINER ===== -->
 <div class="min-h-screen bg-green-100 dark:bg-gray-900">
 
   <!-- MAIN PANEL - Full width -->
@@ -538,7 +537,7 @@
 
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
 
-      <!-- Storage Controls -->
+      <!-- ===== STORAGE CONTROLS ===== -->
       <div class="mb-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg border">
         <div class="flex flex-wrap items-center justify-between gap-4">
           <div>
@@ -553,7 +552,7 @@
             <input 
               type="file" 
               accept=".json" 
-              on:change={importProfile} 
+              onchange={importProfile} 
               bind:this={fileInput}
               class="hidden" 
             />
@@ -569,7 +568,180 @@
         </div>
       </div>
 
-      <!-- GRID -->
+      <!-- ===== ENHANCED SAVE STATUS SECTION ===== -->
+      <div class="mb-6">
+        <!-- Save Status Banner -->
+        {#if saveStatus}
+          <div class="mb-4 p-4 rounded-lg border transition-all duration-300 {
+            saveStatus === 'saving' ? 'bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800' :
+            saveStatus === 'success' ? 'bg-green-50 border-green-200 dark:bg-green-900/20 dark:border-green-800' :
+            'bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800'
+          }">
+            
+            <div class="flex items-start gap-3">
+              <!-- Status Icon -->
+              <div class="flex-shrink-0 mt-0.5">
+                {#if saveStatus === 'saving'}
+                  <svg class="animate-spin h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                {:else if saveStatus === 'success'}
+                  <CheckCircleOutline class="w-5 h-5 text-green-600 dark:text-green-400" />
+                {:else if saveStatus === 'error'}
+                  <ExclamationCircleOutline class="w-5 h-5 text-red-600 dark:text-red-400" />
+                {/if}
+              </div>
+
+              <!-- Status Content -->
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                  <h4 class="text-sm font-medium {
+                    saveStatus === 'saving' ? 'text-blue-800 dark:text-blue-200' :
+                    saveStatus === 'success' ? 'text-green-800 dark:text-green-200' :
+                    'text-red-800 dark:text-red-200'
+                  }">
+                    {#if saveStatus === 'saving'}
+                      Saving Profile...
+                    {:else if saveStatus === 'success'}
+                      {saveLocation === 'database' ? '✅ Database Save Successful!' : '✅ Local Save Successful!'}
+                    {:else if saveStatus === 'error'}
+                      {saveLocation === 'database' ? '❌ Database Save Failed' : '❌ Local Save Failed'}
+                    {/if}
+                  </h4>
+                  
+                  <!-- Save Location Badge -->
+                  {#if saveLocation}
+                    <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium {
+                      saveLocation === 'database' ? 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300' :
+                      'bg-gray-100 text-gray-800 dark:bg-gray-900/30 dark:text-gray-300'
+                    }">
+                      {saveLocation === 'database' ? '🗄️ Database' : '💾 Local Storage'}
+                    </span>
+                  {/if}
+                </div>
+
+                <!-- Detailed Message -->
+                {#if detailedSaveMessage}
+                  <p class="text-sm {
+                    saveStatus === 'saving' ? 'text-blue-700 dark:text-blue-300' :
+                    saveStatus === 'success' ? 'text-green-700 dark:text-green-300' :
+                    'text-red-700 dark:text-red-300'
+                  }">
+                    {detailedSaveMessage}
+                  </p>
+                {/if}
+
+                <!-- Timestamp -->
+                {#if lastSaveTime && saveStatus === 'success'}
+                  <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                    Saved at {lastSaveTime.toLocaleTimeString()}
+                    {#if lastSavedProfileId && saveLocation === 'database'}
+                      • Profile ID: {lastSavedProfileId.substring(0, 8)}...
+                    {/if}
+                  </p>
+                {/if}
+              </div>
+
+              <!-- Close Button -->
+              {#if saveStatus !== 'saving'}
+                <button 
+                  onclick={() => { saveStatus = null; detailedSaveMessage = ''; saveLocation = null; }}
+                  class="flex-shrink-0 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition-colors"
+                  title="Dismiss"
+                  aria-label="Dismiss notification"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                  </svg>
+                </button>
+              {/if}
+            </div>
+          </div>
+        {/if}
+
+        <!-- Action Buttons -->
+        <div class="flex flex-wrap items-center justify-between gap-4">
+          <!-- Left side - Profile Summary (when not saving) -->
+          <div class="flex items-center gap-4">
+            {#if !saveStatus && profile_name}
+              <div class="text-sm text-gray-600 dark:text-gray-300">
+                <span class="font-medium">{profile_name}</span>
+                {#if isClient}
+                  {@const summary = profileManager.getProfileSummary()}
+                  <span class="text-xs ml-2">
+                    {summary.criteriaCount} criteria • {summary.activeFeedsCount} feeds • {summary.selectedCategoriesCount} categories
+                    {#if summary.isComplete}
+                      <span class="text-green-600 dark:text-green-400 ml-1">✓ Complete</span>
+                    {:else}
+                      <span class="text-amber-600 dark:text-amber-400 ml-1">⚠ Incomplete</span>
+                    {/if}
+                  </span>
+                {/if}
+              </div>
+            {/if}
+          </div>
+
+          <!-- Right side - Action buttons -->
+          <div class="flex items-center gap-3">
+            <Button color="alternative" onclick={cancelChanges} disabled={saveStatus === 'saving'}>
+              Cancel
+            </Button>
+            <Button 
+              color="primary" 
+              onclick={saveToDatabase} 
+              disabled={saveStatus === 'saving'}
+              class="relative"
+            >
+              {#if saveStatus === 'saving' && saveLocation === 'database'}
+                <svg class="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              {/if}
+              Save to Database
+            </Button>
+            <Button 
+              color="green" 
+              onclick={saveProfile} 
+              disabled={saveStatus === 'saving'}
+              class="relative"
+            >
+              {#if saveStatus === 'saving' && saveLocation === 'local'}
+                <svg class="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              {/if}
+              Save Locally
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Enhanced Validation Errors Section -->
+      {#if validationErrors.length > 0}
+        <div class="mb-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+          <div class="flex items-start gap-3">
+            <ExclamationCircleOutline class="w-5 h-5 text-red-600 dark:text-red-400 mt-0.5 flex-shrink-0" />
+            <div class="flex-1">
+              <h3 class="text-sm font-medium text-red-800 dark:text-red-200 mb-2">
+                Validation Issues ({validationErrors.length})
+              </h3>
+              <ul class="text-sm text-red-700 dark:text-red-300 space-y-1">
+                {#each validationErrors as error, index}
+                  <li class="flex items-start gap-2">
+                    <span class="text-red-400 mt-1">•</span>
+                    <span>{error}</span>
+                  </li>
+                {/each}
+              </ul>
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      <!-- ===== MAIN FORM GRID ===== -->
       <form>
         <div class="mb-6 grid gap-8 md:grid-cols-2">
           <div>
@@ -666,7 +838,7 @@
 
       </form>
 
-      <!-- FORM SECTION WITH RSS FEEDS -->
+      <!-- ===== RSS FEEDS SECTION ===== -->
       <div class="mb-6">
         <h2 class="text-lg font-semibold mb-4">RSS Feeds</h2>
         <p class="text-gray-600 dark:text-gray-300 mb-4">Add RSS feeds to be used for content generation.</p>
@@ -712,59 +884,7 @@
 
         </div>
 
-                <!-- BUTTONS -->
-        <div class="flex justify-between mt-6">
-          <!-- Left side - Validation status -->
-          <div class="flex items-center">
-            {#if saveStatus === 'saving'}
-              <div class="flex items-center text-blue-600 dark:text-blue-400">
-                <svg class="animate-spin h-4 w-4 mr-2" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                </svg>
-                Saving profile...
-              </div>
-            {:else if saveStatus === 'success'}
-              <div class="flex items-center text-green-600 dark:text-green-400">
-                <CheckCircleOutline class="w-4 h-4 mr-2" />
-                Profile saved successfully
-                {#if lastSaveTime}
-                  <span class="text-xs ml-2 text-gray-500">
-                    at {lastSaveTime.toLocaleTimeString()}
-                  </span>
-                {/if}
-              </div>
-            {:else if saveStatus === 'error'}
-              <div class="flex items-center text-red-600 dark:text-red-400">
-                <ExclamationCircleOutline class="w-4 h-4 mr-2" />
-                Validation errors found
-              </div>
-            {/if}
-          </div>
-
-          <!-- Right side - Action buttons -->
-          <div class="space-x-3">
-            <Button color="alternative" onclick={cancelChanges}>Cancel</Button>
-            <Button color="primary" onclick={saveToDatabase}>
-            Save DB Profile
-            </Button>
-            <Button color="green" onclick={saveProfile}>Save Local Profile</Button>
-          </div>
-        </div>
-
-        <!-- Validation Errors -->
-        {#if validationErrors.length > 0}
-          <div class="mt-4 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-            <h3 class="text-sm font-medium text-red-800 dark:text-red-200 mb-2">Please fix the following issues:</h3>
-            <ul class="text-sm text-red-700 dark:text-red-300 list-disc list-inside space-y-1">
-              {#each validationErrors as error}
-                <li>{error}</li>
-              {/each}
-            </ul>
-          </div>
-        {/if}
-
-        <!-- FEED DISPLAY TABLE -->
+        <!-- ===== RSS FEEDS DISPLAY TABLE ===== -->
         <div class="mt-6 overflow-x-auto">
 
           <Table shadow>
@@ -856,3 +976,42 @@
   </div>
 
 </div>
+
+<!-- 
+===== SUMMARY OF ENHANCED FEATURES =====
+
+🔧 ProfileManager Integration:
+- Structured profile object creation
+- Type-safe data handling
+- Automatic validation before saves
+
+💾 Enhanced Save System:
+- Visual status banners with detailed messages
+- Database ID display for successful saves
+- Location badges (Database vs Local Storage)
+- Progress indicators during operations
+- Profile summary with completion status
+
+🎯 User Experience:
+- Auto-save functionality (1-second debounce)
+- Import/Export JSON profiles
+- Validation error display with counts
+- Dismissible success notifications
+- Button states with loading indicators
+
+📊 Database Features:
+- UUID primary key support
+- JSONB structured storage
+- Comprehensive error handling
+- Backup to localStorage after DB saves
+
+🔄 RSS Feed Management:
+- Bulk operations (toggle, delete)
+- Select all functionality
+- Status badges and validation
+- Duplicate prevention
+
+This complete implementation provides a professional profile editor with 
+structured data management, enhanced user feedback, and reliable database 
+integration using your existing PostgreSQL schema.
+-->
